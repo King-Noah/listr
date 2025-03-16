@@ -5,4 +5,6 @@ csv_to_json.py
 add_address_to_json.py
 geocode_addresses.py
 db.sqlite3
+git_commit.sh
 .DS_Store
+listrapp/__pycache__/

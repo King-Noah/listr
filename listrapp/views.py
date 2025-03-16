@@ -1,25 +1,19 @@
+import boto3
 import certifi
 import json
-import re
 import ssl
 import numpy as np
 import plotly.express as px # type: ignore
 
-# from apify_client import ApifyClient
-from django.http import HttpResponse
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
 from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
-from pathlib import Path
 
 def index(request):
     return render(request, "listrapp/template.html")
 
-# # Define the JSON file path for storing data
-JSON_FILE_PATH = Path("airbnb_data.json")
-
-from django.views.decorators.csrf import csrf_exempt
 
 @csrf_exempt
 def get_lat_long(street_address):
@@ -53,35 +47,29 @@ def get_lat_long(street_address):
 
 def search_proximity(request):
     try:
-        # Define Austin, TX center coordinates
-        latitude, longitude = 30.2672, -97.7431  # Fixed central point
-
-        # Load Permitted Properties data
-        with open("permitted_properties.json", "r") as permitted_file:
-            permitted_properties = json.load(permitted_file)
-
-        # Load Airbnb data
-        with open("airbnb_listings.json", "r") as airbnb_file:
-            airbnb_data = json.load(airbnb_file)
+        latitude, longitude = 30.2672, -97.7431  # Austin, TX center
+        
+        # S3 setup
+        s3_client = boto3.client("s3")
+        bucket_name = "nk.data.analysis"
+        
+        # Read JSON from S3
+        permitted_properties = read_json_from_s3(s3_client, bucket_name, "short_term_rentals/permitted_properties.json") or []
+        airbnb_data = read_json_from_s3(s3_client, bucket_name, "short_term_rentals/airbnb_listings.json") or []
 
         # Get radius and data type from request
         data = json.loads(request.body)
         radius_km = max(1, min(float(data.get("radius", 20)), 30))
-        data_type = data.get("data_type", "both")  # Can be "permitted", "airbnb", or "both"
+        data_type = data.get("data_type", "both")
 
-        permitted_matches = []
-        airbnb_matches = []
+        permitted_matches, airbnb_matches = [], []
 
-        # Check for properties within radius
+        # Process permitted properties
         for item in permitted_properties:
             try:
-                prop_lat = item.get("latitude")
-                prop_lon = item.get("longitude")
-
-                if prop_lat is not None and prop_lon is not None:
-                    prop_lat, prop_lon = float(prop_lat), float(prop_lon)
+                prop_lat, prop_lon = float(item.get("latitude", 0)), float(item.get("longitude", 0))
+                if prop_lat and prop_lon:
                     distance = geodesic((prop_lat, prop_lon), (latitude, longitude)).kilometers
-
                     if distance <= radius_km:
                         permitted_matches.append({
                             "address": item.get("full_address", "N/A"),
@@ -89,18 +77,15 @@ def search_proximity(request):
                             "longitude": prop_lon,
                             "distance": round(distance, 2)
                         })
-            except (KeyError, ValueError, TypeError) as e:
-                print(f"⚠️ Skipping invalid entry in permited_properties: {item} → Error: {e}")
+            except (ValueError, TypeError) as e:
+                print(f"⚠️ Skipping invalid entry in permitted_properties: {item} → {e}")
 
+        # Process Airbnb data
         for item in airbnb_data:
             try:
-                prop_lat = item.get("latitude")
-                prop_lon = item.get("longitude")
-
-                if prop_lat is not None and prop_lon is not None:
-                    prop_lat, prop_lon = float(prop_lat), float(prop_lon)
+                prop_lat, prop_lon = float(item.get("latitude", 0)), float(item.get("longitude", 0))
+                if prop_lat and prop_lon:
                     distance = geodesic((prop_lat, prop_lon), (latitude, longitude)).kilometers
-
                     if distance <= radius_km:
                         airbnb_matches.append({
                             "address": item.get("address", "N/A"),
@@ -108,54 +93,22 @@ def search_proximity(request):
                             "longitude": prop_lon,
                             "distance": round(distance, 2)
                         })
-            except (KeyError, ValueError, TypeError) as e:
-                print(f"⚠️ Skipping invalid entry in airbnb_data: {item} → Error: {e}")
+            except (ValueError, TypeError) as e:
+                print(f"⚠️ Skipping invalid entry in airbnb_data: {item} → {e}")
 
-        # rework this
-        if radius_km <= 2:
-            zoom_level = 14
-        elif radius_km <= 5:
-            zoom_level = 12
-        elif radius_km <= 10:
-            zoom_level = 11
-        elif radius_km <= 20:
-            zoom_level = 10
-        elif radius_km <= 40:
-            zoom_level = 9.75
-        else:
-            zoom_level = 6
-
-        fig = px.scatter_mapbox(
-            [], lat=[], lon=[], text=[], zoom=zoom_level, center={"lat": latitude, "lon": longitude},
-            title="Austin, TX - Airbnb (Red) vs Permitted (Blue)"
-        )
+        # Create map visualization (unchanged)
+        zoom_level = 14 if radius_km <= 2 else 12 if radius_km <= 5 else 11 if radius_km <= 10 else 10 if radius_km <= 20 else 9.75 if radius_km <= 40 else 6
+        fig = px.scatter_mapbox([], lat=[], lon=[], text=[], zoom=zoom_level, center={"lat": latitude, "lon": longitude}, title="Austin, TX - Airbnb (Red) vs Permitted (Blue)")
 
         if data_type in ["both", "airbnb"]:
-            airbnb_layer = px.scatter_mapbox(
-                airbnb_matches, lat="latitude", lon="longitude", text="address",
-                color_discrete_sequence=["red"],
-                opacity=0.5
-            )
+            airbnb_layer = px.scatter_mapbox(airbnb_matches, lat="latitude", lon="longitude", text="address", color_discrete_sequence=["red"], opacity=0.5)
             for trace in airbnb_layer.data:
                 fig.add_trace(trace)
 
         if data_type in ["both", "permitted"]:
-            permitted_layer = px.scatter_mapbox(
-                permitted_matches, lat="latitude", lon="longitude", text="address",
-                color_discrete_sequence=["blue"],
-                opacity=0.5
-            )
+            permitted_layer = px.scatter_mapbox(permitted_matches, lat="latitude", lon="longitude", text="address", color_discrete_sequence=["blue"], opacity=0.5)
             for trace in permitted_layer.data:
-                fig.add_trace(trace)    
-
-        # Generate circle points for the radius ring
-        num_points = 100
-        angles = np.linspace(0, 2 * np.pi, num_points)
-        circle_lats = latitude + (radius_km / 111) * np.sin(angles)
-        circle_lons = longitude + (radius_km / (111 * np.cos(np.radians(latitude)))) * np.cos(angles)
-
-        fig.add_trace(px.line_mapbox(lat=circle_lats, lon=circle_lons).data[0])
-        fig.data[-1].update(line=dict(color="grey", width=2))
+                fig.add_trace(trace)
 
         fig.update_layout(mapbox_style="open-street-map", margin={"r": 0, "t": 50, "l": 0, "b": 0})
 
@@ -166,6 +119,38 @@ def search_proximity(request):
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
 
 
+# Global cache
+cached_data = {}
+
+def read_json_from_s3(s3_client, bucket_name, key):
+    """
+    Fetches JSON from S3 and caches it to avoid multiple requests.
+
+    Args:
+        s3_client: Boto3 S3 client
+        bucket_name (str): Name of the S3 bucket
+        key (str): Path to the JSON file in S3
+
+    Returns:
+        list/dict: Cached JSON content
+    """
+    if key in cached_data:
+        print(f"✅ Using cached data for {key}")
+        return cached_data[key]
+
+    try:
+        response = s3_client.get_object(Bucket=bucket_name, Key=key)
+        json_content = response["Body"].read().decode("utf-8")
+        data = json.loads(json_content)
+
+        # Store in cache
+        cached_data[key] = data
+        print(f"📥 Fetched from S3 and cached: {key}")
+
+        return data
+    except Exception as e:
+        print(f"❌ Error reading {key} from S3: {e}")
+        return None
 
 """ FEATURE TO BE ADDED LATER """
 
