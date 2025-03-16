@@ -1,0 +1,7 @@
+*.json
+*.txt
+*.csv
+csv_to_json.py
+add_address_to_json.py
+geocode_addresses.py
+db.sqlite3

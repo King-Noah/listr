@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Scraped Data</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map {
+            height: 500px;
+            width: 100%;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>LiSTR</h1>
+    <!-- Button for scraping data 
+    <button onclick="startScrape()">Start Scraping</button> -->
+    <!-- Button for reverse geocoding 
+    <button onclick="addAddresses()">Add Addresses</button> -->
+
+    <!-- Textbox and button for address search -->
+    <h2>Address Search</h2>
+    <textarea id="addressesInput" placeholder="Enter addresses, one per line" rows="5" cols="50"></textarea>
+    <button onclick="searchAddresses()">Search</button>
+    <p id="searchResults"></p> 
+
+    <!-- Inputs for proximity search -->
+    <h2>Proximity Search</h2>
+    <label for="proximityAddress">Address:</label>
+    <input type="text" id="proximityAddress" placeholder="Enter address">
+    <br>
+    <label for="radius">Radius (in km):</label>
+    <input type="number" id="radius" placeholder="Enter radius">
+    <br>
+    <button onclick="searchProximity()">Search Proximity</button>
+    <p id="proximityResults"></p>
+
+    <!-- Map container -->
+    <div id="map"></div>
+
+    <ul>
+        {% for item in items %}
+            <li>
+                <a href="{{ item.url }}" target="_blank">Property {{ item.id }}</a> -
+                Coordinates: {{ item.coordinates.latitude }}, {{ item.coordinates.longitude }} -
+                Address: {{ item.address|default:"N/A" }}
+            </li>
+        {% endfor %}
+    </ul>
+
+    <script>
+        // Initialize the map
+        const map = L.map('map').setView([30.2672, -97.7431], 12); // Default view (Austin, TX)
+
+        // Add tile layer to the map
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // Function to search for multiple addresses
+        async function searchAddresses() {
+            const addressesInput = document.getElementById("addressesInput").value;
+            if (!addressesInput.trim()) {
+                alert("Please enter at least one address.");
+                return;
+            }
+
+            const addresses = addressesInput.split("\n").map(addr => addr.trim()).filter(addr => addr);
+
+            const response = await fetch("{% url 'search_addresses' %}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": "{{ csrf_token }}",
+                },
+                body: JSON.stringify({ addresses: addresses }),
+            });
+
+            const data = await response.json();
+
+            if (data.status === "success") {
+                if (data.matches && data.matches.length > 0) {
+                    let resultsHtml = "<ul>";
+                    data.matches.forEach(match => {
+                        resultsHtml += `
+                            <li>
+                                Address: <a href="${match.url}" target="_blank">${match.address}</a><br>
+                                Source: ${match.source}
+                            </li>
+                        `;
+                    });
+                    resultsHtml += "</ul>";
+                    document.getElementById("searchResults").innerHTML = resultsHtml;
+                } else {
+                    document.getElementById("searchResults").innerText = data.message;
+                }
+            } else {
+                alert(data.message);
+            }
+        }
+
+        // Function for proximity search
+        async function searchProximity() {
+            const address = document.getElementById("proximityAddress").value;
+            const radius = document.getElementById("radius").value;
+
+            if (!address || !radius) {
+                alert("Please fill in all fields for proximity search.");
+                return;
+            }
+
+            const response = await fetch("{% url 'search_proximity' %}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": "{{ csrf_token }}",
+                },
+                body: JSON.stringify({ address: address, radius: radius }),
+            });
+
+            const data = await response.json();
+
+            if (data.status === "success") {
+                // Clear existing markers from the map
+                map.eachLayer(layer => {
+                    if (layer instanceof L.Marker) {
+                        map.removeLayer(layer);
+                    }
+                });
+
+                if (data.matches && data.matches.length > 0) {
+                    let resultsHtml = "<ul>";
+                    data.matches.forEach(match => {
+                        const lat = parseFloat(match.latitude);
+                        const lng = parseFloat(match.longitude);
+
+                        // Add a marker for each result
+                        const marker = L.marker([lat, lng]).addTo(map);
+                        marker.bindPopup(`
+                            <strong>${match.address}</strong><br>
+                            Distance: ${match.distance} km<br>
+                            <a href="${match.url}" target="_blank">View Property</a>
+                        `);
+
+                    });
+                    resultsHtml += "</ul>";
+                    document.getElementById("proximityResults").innerHTML = resultsHtml;
+
+                    // Center the map on the first result
+                    const firstResult = data.matches[0];
+                    map.setView([parseFloat(firstResult.latitude), parseFloat(firstResult.longitude)], 14);
+                } else {
+                    document.getElementById("proximityResults").innerText = "No matches found within the specified radius.";
+                }
+            } else {
+                alert(data.message);
+            }
+        }
+    </script>
+</body>
+</html>

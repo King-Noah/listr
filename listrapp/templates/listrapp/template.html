@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script>
+        const csrfToken = "{{ csrf_token }}";
+    </script>
+    <title>LiSTR</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1, h2 {
+            margin: 10px 0;
+        }
+
+        #container {
+            display: flex;
+            flex-direction: row; 
+            gap: 20px;
+            max-width: 1400px;
+            margin: auto;
+        }
+
+        #search-section {
+            width: 25%;
+        }
+
+        #map {
+            width: 75%;
+            height: 800px; 
+            border: 1px solid #ccc;
+        }
+
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        input {
+            width: 100px;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        button {
+            padding: 8px 16px; 
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+            width: auto;
+            min-width: 120px; 
+            text-align: center;
+            display: block;  
+            margin-bottom: 10px; 
+            width: 200px;
+            float: right;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>LiSTR</h1>
+    
+    <div id="container">
+        <div id="search-section">
+            <h2>Proximity Search</h2>
+            <div class="input-group">
+                <label for="radius">Radius (km):</label>
+                <input type="number" id="radius" value=20 min=1 max=30>
+                <button onclick="searchProximity()">Add Radius</button>
+            </div>
+            <button onclick="updateMap('permitted')">Permitted Properties</button>
+            <button onclick="updateMap('airbnb')">Airbnb Listings</button>
+            <button onclick="updateMap('both')">Show Both</button>
+            <p id="proximityResults"></p>
+        </div>
+        
+        <div id="map"></div>
+    </div>
+
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script>
+        function getRadius() {
+            let radius = document.getElementById("radius").value || 20;
+            return Math.max(1, Math.min(30, parseFloat(radius)));
+        }
+
+        async function searchProximity() {
+            const radius = getRadius();
+
+            const response = await fetch("{% url 'search_proximity' %}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": "{{ csrf_token }}",
+                },
+                body: JSON.stringify({ radius: radius }),
+            });
+
+            const data = await response.json();
+
+            if (data.status === "success") {
+                const plotData = JSON.parse(data.plot);
+                Plotly.newPlot("map", plotData.data, plotData.layout);
+            } else {
+                alert(data.message);
+            }
+        }
+
+        async function updateMap(dataType) {
+            const radius = getRadius();
+
+            const response = await fetch("{% url 'search_proximity' %}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": "{{ csrf_token }}",
+                },
+                body: JSON.stringify({ radius: radius, data_type: dataType }),
+            });
+
+            const data = await response.json();
+
+            if (data.status === "success") {
+                const plotJSON = JSON.parse(data.plot);
+                Plotly.newPlot("map", plotJSON.data, plotJSON.layout);
+            } else {
+                alert("Error loading map: " + data.message);
+            }
+        }
+    </script>
+</body>
+</html>
